@@ -1,0 +1,79 @@
+model_id: "meta-llama/Llama-3.1-8B"
+output_root: "./runs"
+run_name: "llama31_8b_relu"
+seed: 42
+
+activation:
+  type: "relu"
+  layer_mode: "all"
+  # Example partial ReLU-fication:
+  # layer_mode: "partial"
+  # layer_indices: [0, 1, 2, 3]
+
+training:
+  total_steps: 2700
+  stage_size: 900
+  # Conservative starting point for a single 96 GB GPU.
+  batch_size: 16
+  gradient_accumulation_steps: 2
+  learning_rate: 1.0e-4
+  warmup_steps: 50
+  weight_decay: 0.01
+  logging_steps: 10
+  save_steps: 300
+  save_total_limit: 1
+  gradient_checkpointing: true
+  bf16: true
+  optimizer: "adamw_torch_fused"
+  lr_scheduler_type: "linear"
+  torch_compile: false
+
+lora:
+  r: 64
+  alpha: 16
+  dropout: 0.05
+  include_mlp: true
+  include_attention: true
+
+logging:
+  wandb:
+    enabled: false
+    project: "relu-tune"
+    entity: null
+    group: null
+
+measure_sparsity:
+  enabled: false
+  num_samples: 32
+  batch_size: 16
+  threshold: 0.0
+  dataset: "allenai/c4"
+  dataset_config: "en"
+  dataset_split: "train"
+  text_column: "text"
+
+data:
+  name: "tiiuae/falcon-refinedweb"
+  split: "train"
+  revision: "c735840"
+  cache_root: "./data_cache"
+  block_size: 1024
+  train_docs: 150000
+
+validation:
+  enabled: true
+  docs: 1000
+  skip_docs: 180000
+  eval_steps: 100
+  batch_size: 16
+
+evaluation:
+  benchmarks: ["piqa", "openbookqa", "arc_easy", "winogrande", "hellaswag", "boolq", "sciq"]
+  perplexity_datasets: ["wikitext2", "refinedweb"]
+  perplexity_seq_len: 1024
+  perplexity_batch_size: 16
+  wikitext2:
+    num_samples: -1
+  refinedweb:
+    skip_docs: 200000
+    num_samples: 500

@@ -1,0 +1,21 @@
+# Evaluation defaults for ReLU-Tune
+
+evaluation:
+  benchmarks:
+    - piqa
+    - openbookqa
+    - sciq
+    - winogrande
+    - hellaswag
+    - arc_easy
+    - boolq
+  benchmark_batch_size: 16
+  num_fewshot: 0
+  perplexity_datasets: ["wikitext2", "refinedweb"]
+  perplexity_seq_len: 1024
+  perplexity_batch_size: 4
+  wikitext2:
+    num_samples: -1
+  refinedweb:
+    skip_docs: 200000
+    num_samples: 500

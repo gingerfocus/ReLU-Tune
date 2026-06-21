@@ -1,0 +1,12 @@
+# Core dependencies.
+torch
+transformers
+datasets
+peft
+accelerate
+pyyaml
+sentencepiece
+safetensors
+lm-eval
+matplotlib
+wandb

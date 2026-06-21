@@ -1,0 +1,11 @@
+measure_sparsity:
+  num_samples: 32
+  batch_size: 16
+  threshold: 0.0
+  dataset: "allenai/c4"
+  dataset_config: "en"
+  dataset_split: "train"
+  text_column: "text"
+
+data:
+  block_size: 1024
