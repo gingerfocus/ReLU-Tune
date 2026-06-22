@@ -1,5 +1,7 @@
 # ReLU-Tune
 
+[![Hugging Face](https://img.shields.io/badge/Hugging%20Face-Model-fcd022?logo=huggingface&logoColor=000)](https://huggingface.co/bishmoy/Llama-3.1-8B-ReLU)
+
 ReLU-Tune is a lightweight toolkit for fine-tuning and evaluating ReLU-activated language models. It provides a simple, config-driven workflow for full or partial ReLU-fication, staged LoRA training, model evaluation, and activation sparsity measurement.
 
 ## Overview
@@ -10,6 +12,14 @@ ReLU-Tune is built around that problem: apply ReLU, recover quality with LoRA fi
 
 ![ReLU-Tune workflow](graphics/workflow.png)
 
+## Released Model
+
+A public reference model produced with ReLU-Tune is available on Hugging Face:
+
+- [`bishmoy/Llama-3.1-8B-ReLU`](https://huggingface.co/bishmoy/Llama-3.1-8B-ReLU)
+
+This release is a full ReLU-fied Llama 3.1 8B model exported as a merged checkpoint for straightforward loading and evaluation.
+
 ## Quick Start
 
 Install the required packages:
@@ -18,18 +28,7 @@ Install the required packages:
 pip install -r requirements.txt
 ```
 
-`requirements.txt` is intentionally broad. A recently tested setup for the Llama 3.1 8B run was:
-
-- Python `3.12.3`
-- `torch==2.8.0+cu128`
-- `transformers==5.12.1`
-- `peft==0.19.1`
-- `accelerate==1.14.0`
-- `datasets==5.0.0`
-- `lm-eval==0.4.12`
-- `flash-attn==2.8.3.post1`
-
-If you run into environment-specific issues, matching this stack is a good first debugging step. `flash-attn` is optional.
+`requirements.txt` is intentionally broad. If you run into environment-specific issues, see `Tested Models and Environment` below for a known-good setup. `flash-attn` is optional.
 
 Start a training run:
 
