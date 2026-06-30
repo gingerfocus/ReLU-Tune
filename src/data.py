@@ -13,7 +13,7 @@ def load_tokenizer(model_id):
 
 def tokenize_and_pack(dataset, tokenizer, block_size):
     def tokenize_batch(examples):
-        return tokenizer(examples["text"], truncation=False)
+        return tokenizer(examples["text"], max_length=131072, truncation=False)
 
     def group_texts(examples):
         concatenated = {key: sum(examples[key], []) for key in examples.keys()}

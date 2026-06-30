@@ -11,7 +11,7 @@ For each of the 16 layers in Llama 3.2 1B, this script:
 
 Usage:
   python scripts/relu_layer_sweep.py \
-      --config configs/train_llama32_1b_debug.yaml \
+      --config configs/train_llama32_1b.yaml \
       --steps-per-layer 30 \
       --top-k 8 \
       --measure-sparsity \
@@ -19,10 +19,15 @@ Usage:
 """
 
 import argparse
+import faulthandler
 import gc
 import json
+import subprocess
 import sys
+import time
 from pathlib import Path
+
+faulthandler.enable()
 
 import torch
 import yaml
@@ -36,7 +41,6 @@ from src.lora import apply_lora, get_lora_target_modules
 from src.modeling import load_base_model
 from src.runtime import enable_transformers_checkpoint_resume_compat, get_samples_per_step, set_seed
 from src.sparsity import measure_prefill_sparsity
-
 
 def _cleanup(*objects):
     for obj in objects:
@@ -90,6 +94,7 @@ def run_single_layer(
         rank=config["lora"]["r"],
         alpha=config["lora"]["alpha"],
         dropout=config["lora"].get("dropout", 0.0),
+        layers_to_transform=[layer_index],
     )
 
     samples_per_step = get_samples_per_step(
@@ -122,8 +127,8 @@ def run_single_layer(
         torch_compile=config["training"].get("torch_compile", False),
         report_to="none",
         remove_unused_columns=False,
-        dataloader_num_workers=2,
-        dataloader_pin_memory=True,
+        dataloader_num_workers=0,
+        dataloader_pin_memory=False,
         logging_first_step=True,
         eval_strategy="steps",
         eval_steps=steps_per_layer,
@@ -203,52 +208,55 @@ def main():
     parser.add_argument("--measure-sparsity", action="store_true", help="Measure prefill sparsity per layer")
     parser.add_argument("--output", default=None, help="Path to save JSON results")
     parser.add_argument("--num-layers", type=int, default=16, help="Number of layers to sweep (default 16)")
+    # Hidden/internal arguments for subprocess communication
+    parser.add_argument("--single-layer", type=int, default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--progress-file", default=None, help=argparse.SUPPRESS)
     args = parser.parse_args()
 
-    enable_transformers_checkpoint_resume_compat()
-    config = load_merged_config(args.config)
-    set_seed(config.get("seed", 42))
+    # Determine progress file path
+    if args.progress_file:
+        progress_file = Path(args.progress_file)
+    else:
+        if args.output:
+            out_path = Path(args.output)
+            progress_file = out_path.with_name(out_path.stem + "_progress.json")
+        else:
+            progress_file = Path("layer_sweep_progress.json")
 
-    print("=" * 70)
-    print("ReLU-Tune Layer Sweep")
-    print("=" * 70)
-    print(f"Model: {config['model_id']}")
-    print(f"Activation: {config['activation']['type']}")
-    print(f"Steps per layer: {args.steps_per_layer}")
-    print(f"Top-K: {args.top_k}")
-    print(f"Measure sparsity: {args.measure_sparsity}")
-    print(f"Num layers: {args.num_layers}")
-    print("=" * 70)
+    # ------------------ WORKER MODE ------------------
+    if args.single_layer is not None:
+        enable_transformers_checkpoint_resume_compat()
+        config = load_merged_config(args.config)
+        set_seed(config.get("seed", 42))
 
-    tokenizer = load_tokenizer(config["model_id"])
-    validation_config = config.get("validation", {})
-    train_dataset, eval_dataset = prepare_refinedweb_train_validation(
-        model_id=config["model_id"],
-        tokenizer=tokenizer,
-        train_docs=config["data"]["train_docs"],
-        validation_docs=validation_config.get("docs", 0),
-        validation_skip_docs=validation_config.get("skip_docs", 0),
-        block_size=config["data"]["block_size"],
-        revision=config["data"]["revision"],
-        seed=config.get("seed", 42),
-        cache_root=config["data"]["cache_root"],
-    )
-
-    samples_per_step = get_samples_per_step(
-        config["training"]["batch_size"],
-        config["training"]["gradient_accumulation_steps"],
-    )
-    total_needed = args.num_layers * args.steps_per_layer * samples_per_step
-    if len(train_dataset) < total_needed:
-        raise ValueError(
-            f"Train dataset too small: {len(train_dataset):,} < {total_needed:,} sequences needed"
+        tokenizer = load_tokenizer(config["model_id"])
+        validation_config = config.get("validation", {})
+        train_dataset, eval_dataset = prepare_refinedweb_train_validation(
+            model_id=config["model_id"],
+            tokenizer=tokenizer,
+            train_docs=config["data"]["train_docs"],
+            validation_docs=validation_config.get("docs", 0),
+            validation_skip_docs=validation_config.get("skip_docs", 0),
+            block_size=config["data"]["block_size"],
+            revision=config["data"]["revision"],
+            seed=config.get("seed", 42),
+            cache_root=config["data"]["cache_root"],
         )
 
-    sparsity_config = config.get("measure_sparsity", {})
-    results = []
+        samples_per_step = get_samples_per_step(
+            config["training"]["batch_size"],
+            config["training"]["gradient_accumulation_steps"],
+        )
+        total_needed = args.num_layers * args.steps_per_layer * samples_per_step
+        if len(train_dataset) < total_needed:
+            raise ValueError(
+                f"Train dataset too small: {len(train_dataset):,} < {total_needed:,} sequences needed"
+            )
 
-    for layer_index in range(args.num_layers):
-        print(f"\n--- Layer {layer_index} ---")
+        sparsity_config = config.get("measure_sparsity", {})
+        layer_index = args.single_layer
+
+        print(f"\n--- [Worker] Running Layer {layer_index} ---")
         result = run_single_layer(
             layer_index=layer_index,
             config=config,
@@ -259,11 +267,112 @@ def main():
             measure_sparsity=args.measure_sparsity,
             sparsity_config=sparsity_config,
         )
-        results.append(result)
+
+        # Print results of the layer
         print(f"  Train loss: {result['train_loss']:.4f}" if result["train_loss"] is not None else "  Train loss: N/A")
         print(f"  Eval loss:  {result['eval_loss']:.4f}" if result["eval_loss"] is not None else "  Eval loss: N/A")
         if args.measure_sparsity:
             print(f"  Sparsity:   {result['sparsity']:.2f}%")
+
+        # Load existing progress results
+        results = []
+        if progress_file.exists():
+            try:
+                results = json.loads(progress_file.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+
+        results = [r for r in results if r["layer"] != layer_index]
+        results.append(result)
+        results = sorted(results, key=lambda x: x["layer"])
+
+        # Atomic write
+        temp_file = progress_file.with_suffix(".tmp")
+        temp_file.parent.mkdir(parents=True, exist_ok=True)
+        temp_file.write_text(json.dumps(results, indent=2), encoding="utf-8")
+        temp_file.replace(progress_file)
+
+        sys.exit(0)
+
+    # ------------------ MANAGER MODE ------------------
+    enable_transformers_checkpoint_resume_compat()
+    config = load_merged_config(args.config)
+    set_seed(config.get("seed", 42))
+
+    print("=" * 70)
+    print("ReLU-Tune Layer Sweep (Manager Mode)")
+    print("=" * 70)
+    print(f"Model: {config['model_id']}")
+    print(f"Activation: {config['activation']['type']}")
+    print(f"Steps per layer: {args.steps_per_layer}")
+    print(f"Top-K: {args.top_k}")
+    print(f"Measure sparsity: {args.measure_sparsity}")
+    print(f"Num layers: {args.num_layers}")
+    print(f"Progress file: {progress_file}")
+    print("=" * 70)
+
+    # Filter out --single-layer and --progress-file arguments from sys.argv
+    base_args = []
+    skip_next = False
+    for arg in sys.argv[1:]:
+        if skip_next:
+            skip_next = False
+            continue
+        if arg in ("--single-layer", "--progress-file"):
+            skip_next = True
+            continue
+        if arg.startswith("--single-layer=") or arg.startswith("--progress-file="):
+            continue
+        base_args.append(arg)
+
+    # Load existing progress
+    results = []
+    if progress_file.exists():
+        try:
+            results = json.loads(progress_file.read_text(encoding="utf-8"))
+            print(f"Loaded {len(results)} existing result(s) from progress file.")
+        except Exception:
+            print("Failed to parse progress file, starting fresh.")
+
+    completed_layers = {r["layer"] for r in results}
+
+    max_retries = 10
+    cooldown_seconds = 10
+    for layer_index in range(args.num_layers):
+        if layer_index in completed_layers:
+            print(f"Layer {layer_index} already complete (skipped)")
+            continue
+
+        cmd = [
+            sys.executable,
+            sys.argv[0]
+        ] + base_args + [
+            "--single-layer", str(layer_index),
+            "--progress-file", str(progress_file)
+        ]
+
+        success = False
+        for attempt in range(1, max_retries + 1):
+            print(f"\n[Manager] Spawning subprocess for Layer {layer_index} (Attempt {attempt}/{max_retries})...")
+            try:
+                # run subprocess and stream stdout/stderr directly
+                subprocess.run(cmd, check=True)
+                success = True
+                break
+            except subprocess.CalledProcessError as exc:
+                print(f"[Manager] Subprocess for Layer {layer_index} failed on attempt {attempt}/{max_retries}: {exc}")
+                if attempt < max_retries:
+                    print(f"[Manager] Waiting {cooldown_seconds} seconds before retrying...")
+                    time.sleep(cooldown_seconds)
+                else:
+                    print(f"[Manager] Subprocess for Layer {layer_index} failed after {max_retries} attempts. Aborting.")
+                    raise exc
+
+    # Load final results
+    if progress_file.exists():
+        results = json.loads(progress_file.read_text(encoding="utf-8"))
+    else:
+        raise FileNotFoundError(f"Progress file {progress_file} not found after run.")
 
     sorted_combined, train_ranks, eval_ranks = compute_ranks(results, args.measure_sparsity)
     top_k_layers = [layer for layer, _ in sorted_combined[: args.top_k]]
@@ -334,6 +443,12 @@ def main():
         output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         print(f"\nResults saved to {output_path}")
 
+    # Clean up progress file on successful completion
+    if progress_file.exists():
+        try:
+            progress_file.unlink()
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     main()

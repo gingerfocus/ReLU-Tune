@@ -10,3 +10,5 @@ safetensors
 lm-eval
 matplotlib
 wandb
+
+requests

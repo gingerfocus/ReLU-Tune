@@ -131,8 +131,8 @@ def _build_training_arguments(config, output_dir, stage_steps):
         torch_compile=training.get("torch_compile", False),
         report_to=report_to,
         remove_unused_columns=False,
-        dataloader_num_workers=2,
-        dataloader_pin_memory=True,
+        dataloader_num_workers=0,
+        dataloader_pin_memory=False,
         logging_first_step=True,
     )
     if validation_enabled:
@@ -166,6 +166,7 @@ def _prepare_stage_model(config, run_dir, completed_stages):
         rank=config["lora"]["r"],
         alpha=config["lora"]["alpha"],
         dropout=config["lora"].get("dropout", 0.0),
+        layers_to_transform=layer_indices,
     )
     save_activation_config(run_dir, config["activation"]["type"], layer_indices)
     return model, layer_indices
